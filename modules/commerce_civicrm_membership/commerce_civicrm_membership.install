@@ -1,0 +1,58 @@
+<?php
+
+
+/**
+ * Implements hook_schema().
+ */
+function commerce_civicrm_membership_schema() {
+  $schema = array();
+
+  $schema['commerce_civicrm_membership_ptype_metadata'] = array(
+    'description' => 'The settings table of civicrm membership for product types.',
+    'fields' => array(
+      'product_type_id' => array(
+        'description' => 'The primary identifier for a product type.',
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+      ),
+      'active' => array(
+        'description' => 'Boolean indicating whether or not membership feature should be active',
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'membership_type_field' => array(
+        'description' => 'The Membership type field built within product fields.',
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => FALSE,
+      ),
+      'start_date_field' => array(
+        'description' => 'Link to related start date attribute given by customer.',
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => FALSE,
+      ),
+    ),
+    'unique keys' => array(
+      'product_type_id' => array('product_type_id'),
+    ),
+    'foreign keys' => array(
+      'product_type' => array(
+        'table' => 'commerce_product_type',
+        'columns'=> array('product_type_id' => 'type'),
+      ),
+    ),
+  );
+
+  return $schema;
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function commerce_civicrm_membership_uninstall() {
+  // null
+}

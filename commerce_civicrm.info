@@ -1,6 +1,7 @@
 name = Commerce CiviCRM
 description = Integrates Drupal Commerce with CiviCRM
 core = 7.x
+package = CiviCRM Commerce
 
 dependencies[] = commerce_order
 dependencies[] = civicrm

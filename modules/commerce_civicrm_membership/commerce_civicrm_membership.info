@@ -1,0 +1,8 @@
+name = Commerce CiviCRM Membership
+description = Integrates Drupal Commerce with CiviCRM's Membership on purchase
+core = 7.x
+package = CiviCRM Commerce
+
+dependencies[] = commerce
+dependencies[] = civicrm
+dependencies[] = commerce_civicrm

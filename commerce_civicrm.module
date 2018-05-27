@@ -334,7 +334,7 @@ function commerce_civicrm_admin() {
 
 
 /**
- * Called when the an order is created or changed. Creates a new order or
+ * Called when an order is created or changed. Creates a new order or
  * updates an existing one.
  *
  * @param $order
@@ -390,7 +390,7 @@ function _commerce_civicrm_add_to_groups($cid) {
   if (empty($groups)) {
     return;
   }
-
+  $ret = array();
   foreach ($groups as $id => $key) {
     if ($key != 0) {
       $params = array('contact_id' => $cid, 'group_id' => $key);
@@ -398,8 +398,10 @@ function _commerce_civicrm_add_to_groups($cid) {
       if (!empty($result['is_error'])) {
         watchdog('commerce_civicrm', 'Error adding contact to group: %error', array('%error' => $result['error_message']), WATCHDOG_ERROR);
       }
+      $ret[] = $result;
     }
   }
+  return $ret;
 }
 
 
@@ -611,7 +613,8 @@ function _commerce_civicrm_update_contact($cid, $order) {
   $new_location = civicrm_api3_address_create($address);
 
   // Check if we have shipping information.
-  if ($shipping_profile = $order_wrapper->commerce_customer_shipping->value()) {
+  if (isset($order_wrapper->commerce_customer_shipping) &&
+      ($shipping_profile = $order_wrapper->commerce_customer_shipping->value())) {
     $shipping_profile_wrapper = entity_metadata_wrapper('commerce_customer_profile', $shipping_profile);
     $shipping_address         = $shipping_profile_wrapper->commerce_customer_address->value();
 
@@ -757,6 +760,7 @@ function _commerce_civicrm_process_transactions($cid, $order) {
  *
  */
 function _commerce_civicrm_add_contribution($cid, $order, $transaction) {
+  drupal_alter('commerce_civicrm_pre_order_add_contribution', $cid, $order, $transaction);
   // Don't add contribution for 'No payment required' method.
   if ($transaction->payment_method == 'commerce_no_payment') {
     return;
@@ -818,6 +822,8 @@ function _commerce_civicrm_add_contribution($cid, $order, $transaction) {
   if (civicrm_error($contribution)) {
     watchdog('commerce_civicrm', 'civicrm_api3_contribution_create: %error', array('%error' => $contribution['error_message']), WATCHDOG_ERROR);
   }
+  module_invoke_all('commerce_civicrm_post_order_add_contribution', $cid, $order, $transaction, $contribution);
+  return $contribution;
 }
 
 

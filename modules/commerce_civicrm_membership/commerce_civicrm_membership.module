@@ -1,0 +1,175 @@
+<?php
+
+/**
+ * @file
+  */
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_civicrm_membership_menu() {
+  $items = array();
+
+  // Product Membership settings page
+  foreach (commerce_product_types() as $type => $product_type) {
+    // Convert underscores to hyphens for the menu item argument.
+    $type_arg = strtr($type, '_', '-');
+    if ($product_type['module'] == 'commerce_product_ui') {
+      $items['admin/commerce/products/types/' . $type_arg . '/civicrm-membership'] = array(
+        'title' => 'CiviCRM Membership',
+        'type' => MENU_LOCAL_TASK,
+        'page callback' => 'commerce_civicrm_membership_ui_types',
+        'page arguments' => array($product_type),
+        'access arguments' => array('administer product types'),
+        'context' => MENU_CONTEXT_PAGE | MENU_CONTEXT_INLINE,
+        'weight' => 9,
+        'file' => 'includes/commerce_civicrm_membership_ui.types.inc',
+      );
+    }
+  }
+
+  return $items;
+}
+
+/**
+ * Implements hook_commerce_civicrm_pre_order_add_contribution($cid, $order, $transaction, $contribution)
+ */
+function commerce_civicrm_membership_commerce_civicrm_pre_order_add_contribution($cid, $order, $transaction) {
+  if($transaction->payment_method == 'commerce_no_payment') {
+    // no contribution will be made
+    // grant membership for free
+    commerce_civicrm_membership_apply_contrib($cid, $order);
+  }
+}
+
+/**
+ * Implements hook_commerce_civicrm_post_order_add_contribution($cid, $order, $transaction, $contribution)
+ */
+function commerce_civicrm_membership_commerce_civicrm_post_order_add_contribution($cid, $order, $transaction, $contribution) {
+  commerce_civicrm_membership_apply_contrib($cid, $order, $contribution);
+}
+
+function commerce_civicrm_membership_apply_contrib($cid, $order, $contrib = NULL) {
+  // for each product in order
+  foreach($order->commerce_line_items['und'] as $line) {
+    $line_item = commerce_line_item_load($line['line_item_id']);
+    if($line_item->type == 'product') {
+      $sku = $line_item->line_item_label;
+      $product = commerce_product_load_by_sku($sku);
+      if(empty($product)) {
+        $msg = "Product not found by sku!, `$sku`";
+        watchdog("commerce_civicrm_membership", $msg, NULL, WATCHDOG_WARNING);
+      } else {
+        $mmetadata = commerce_civicrm_membership_ptype_metadata_load($product->type);
+        if(empty($mmetadata) || !$mmetadata['active']) {
+          continue; // skip
+        }
+        $error_msg = NULL;
+        $data = commerce_civicrm_membership_data_from_product($product, $mmetadata, $error_msg);
+        if(empty($data) || !empty($error_msg)) {
+          $msg = "Could not form membership data, ($error_msg), (sku: $sku)";
+          watchdog("commerce_civicrm_membership", $msg, NULL, WATCHDOG_WARNING);
+          continue;
+        }
+        if(!empty($contrib))
+          $data['contribution_id'] = $contrib['id'];
+        commerce_civicrm_grant_membership($cid, $data);
+        $msg = "Did grant membership for cid: $cid";
+        watchdog("commerce_civicrm_membership", $msg, NULL, WATCHDOG_INFO);
+      }
+    }
+  }
+}
+
+function commerce_civicrm_membership_ptype_metadata_load($type) {
+  return db_select('commerce_civicrm_membership_ptype_metadata', 'a')
+    ->condition('product_type_id', $type)
+    ->fields('a')
+    ->execute()
+    ->fetchAssoc();
+}
+
+function commerce_civicrm_membership_data_from_product($product, $mmetadata, &$error_msg) {
+  if(empty($mmetadata['membership_type_field'])) {
+    $error_msg = "No membership type";
+    return NULL;
+  }
+  $membership_type_id = NULL;
+  $start_date = NULL;
+  if(isset($product->{$mmetadata['membership_type_field']})) {
+    $membership_field = $product->{$mmetadata['membership_type_field']};
+    if(!empty($membership_field['und']) &&
+       !empty($membership_field['und'][0]) &&
+       !empty($membership_field['und'][0]['target_id'])) {
+      $membership_type_id = $membership_field['und'][0]['target_id'];
+    }
+  }
+  if(empty($membership_type_id)) {
+    $error_msg = "No membership found!";
+    return NULL;
+  }
+  if(isset($product->{$mmetadata['start_date_field']})) {
+    $start_date_field = $product->{$mmetadata['start_date_field']};
+    if(!empty($start_date_field['und']) &&
+       !empty($start_date_field['und'][0]) &&
+       !empty($start_date_field['und'][0]['value'])) {
+      $start_date = $start_date_field['und'][0]['value'];
+    }
+  }
+  return compact("membership_type_id", "start_date");
+}
+
+function commerce_civicrm_grant_membership($cid, $data) {
+  drupal_alter('commerce_civicrm_membership_pre_grant', $cid, $data);
+  $ret = array();
+  $params = array(
+    'membership_type_id' => $data['membership_type_id'],
+    'contact_id' => $cid,
+  );
+  if(!empty($data['start_date'])) {
+    $time = time();
+    $today = array( 'Y' => date('Y', $time), 'M' => date('m', $time),
+                    'd' => date('d', $time) );
+    $date = commerce_civicrm_membership_eval_rel_date($today, $data['start_date']);
+    $params['start_date'] = date('Y-m-d', mktime(0, 0, 0, $date['M'], $date['d'], $date['Y']));
+  }
+  $result = civicrm_api3('Membership', 'create', $params);
+  if(!empty($result['is_error'])) {
+    watchdog('commerce_civicrm_membership', 'Error adding membership for contact: %error', array('%error' => $result['error_message']), WATCHDOG_ERROR);
+    return NULL;
+  }
+  $ret['membership'] = $result;
+  if(!empty($data['contribution_id'])) {
+    $result = civicrm_api3('MembershipPayment', 'create', array(
+      'membership_id' => $result['id'],
+      'contribution_id' => $data['contribution_id'],
+    ));
+    if(!empty($result['is_error'])) {
+      watchdog('commerce_civicrm_membership', 'Error adding membership payment: %error', array('%error' => $result['error_message']), WATCHDOG_ERROR);
+      return NULL;
+    }
+    $ret['payment'] = $result;
+  }
+  module_invoke_all('commerce_civicrm_membership_post_grant', $cid, $data, $ret);
+  return $ret;
+}
+
+function commerce_civicrm_membership_eval_rel_date($date, $value) {
+  $value="1m";
+  if(preg_match("/^([0-9]+)([dmy]?)/", $value, $matches) == 1) {
+    $interval = intval($matches[1], 10);
+    if($interval == 0)
+      return $date;
+    $unit = 'day';
+    switch($matches[2]) {
+      case 'd': $unit = 'day';
+        break;
+      case 'm': $unit = 'month';
+        break;
+      case 'y': $unit = 'year';
+        break;
+    }
+    return CRM_Utils_Date::intervalAdd($unit, $interval, $date, TRUE);
+  }
+  return $date;
+}
